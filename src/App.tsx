@@ -37,12 +37,14 @@ export default function App() {
   const [flash, setFlash] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
   const [msgInput, setMsgInput] = useState<string>('');
+  const [receiverMode, setReceiverMode] = useState<'0' | '0-1' | '1'>('0');
 
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
   const workersRef = useRef<Worker[]>([]);
   const timeOffsetRef = useRef<number>(0);
   const isSenderRef = useRef<boolean>(false);
+  const receiverModeRef = useRef<'0' | '0-1' | '1'>('0');
   const logContainerRef = useRef<HTMLDivElement>(null);
   const binaryMsgRef = useRef<string>("");
   const receivedBitsRef = useRef<string>("");
@@ -156,6 +158,10 @@ export default function App() {
     const binary = textToBin(rawMsg.slice(0, 4));
     binaryMsgRef.current = binary;
 
+    if (role === 'receiver') {
+        receiverModeRef.current = receiverMode;
+    }
+
     const startTime = Date.now() + 20000; // 20 sec delay as requested
     connRef.current.send({ type: 'start', startTime, role, msgLength: binary.length });
     executeCountdown(startTime, role, binary.length);
@@ -242,101 +248,78 @@ export default function App() {
         slotIntervalRef.current = metronome as any;
 
     } else {
-        addLog("СТАРТ ПРИЕМНИКА (Осциллограф). Слушаю эфир...");
+        const mode = receiverModeRef.current;
+        addLog(`СТАРТ ПРИЕМНИКА (Осциллограф). Режим: ${mode}. Экран заморожен, слушаю эфир 60 секунд...`);
         let lastTime = performance.now();
         let startTime = performance.now();
         let isRunning = true;
-        
-        const sense = () => {
-            if (!isRunning) return;
-            const now = performance.now();
-            const delta = now - lastTime;
-            
-            // Ловим только явные аномалии, игнорируем мелкий мусор
-            if (delta > 60) { 
-                const timeFromStart = ((now - startTime) / 1000).toFixed(2);
-                addLog(`АНОМАЛИЯ: ${delta.toFixed(1)} мс (секунда: ${timeFromStart})`, 'text-yellow-400 font-bold', `АНОМАЛИЯ: ${delta.toFixed(1)} мс (секунда: ${timeFromStart})`);
-            }
-            
-            lastTime = now;
-            
-            // Крутим осциллограф 60 секунд
-            if (now - startTime < 60000) {
-                requestAnimationFrame(sense);
-            } else {
-                isRunning = false;
-                addLog("СЕАНС ЗАКРЫТ");
-                setCountdown("СЕАНС ЗАКРЫТ");
-            }
-        };
-        requestAnimationFrame(sense);
-    }
-  };
-
-  const runSensorTest = (mode: '0' | '0-1' | '1') => {
-    addLog(`СТАРТ ЛОКАЛЬНОГО ТЕСТА СЕНСОРА: [${mode}]. Длительность 1 мин. Экран будет заморожен.`);
-    setExperimentStarted(true);
-    setCountdown('СБОР ДАННЫХ...');
-    setCurrentBitInfo(`Режим ${mode}: интерфейс не обновляется`);
-    killWorkers();
-    
-    // Give UI a moment to update
-    setTimeout(() => {
-        let isRunning = true;
+        const anomalies: { delta: number; timeFromStart: string }[] = [];
         const deltas: number[] = [];
-        const startTime = performance.now();
-        let lastTime = startTime;
         
+        // Apply receiver mode
         if (mode === '1') {
             spawnWorkers();
         } else if (mode === '0-1') {
             spawnWorkers();
             setTimeout(() => {
-                killWorkers();
-                addLog('>> Прогрев завершен, переход в холод', 'text-yellow-400 font-bold', '>> Прогрев завершен, переход в холод');
+                if (isRunning) killWorkers();
             }, 8000);
+        } else {
+            killWorkers();
         }
         
-        const sense = () => {
-            if (!isRunning) return;
-            const now = performance.now();
-            const delta = now - lastTime;
-            lastTime = now;
-            deltas.push(delta);
+        // Даем UI обновиться перед заморозкой
+        setTimeout(() => {
+            lastTime = performance.now();
+            startTime = performance.now();
             
-            if (now - startTime < 60000) {
-                requestAnimationFrame(sense);
-            } else {
-                isRunning = false;
-                killWorkers();
-                setCountdown("ТЕСТ ЗАВЕРШЕН");
-                setCurrentBitInfo('');
+            const sense = () => {
+                if (!isRunning) return;
+                const now = performance.now();
+                const delta = now - lastTime;
                 
-                const anomalies = deltas.filter(d => d > 40);
-                const over20 = deltas.filter(d => d > 20);
-                const maxDelta = deltas.length > 0 ? Math.max(...deltas) : 0;
+                deltas.push(delta);
                 
-                addLog(`--- РЕЗУЛЬТАТ ТЕСТА [${mode}] ---`, 'text-yellow-400 font-bold', `--- РЕЗУЛЬТАТ ТЕСТА [${mode}] ---`);
-                addLog(`Всего фреймов: ${deltas.length}`, undefined, `Всего фреймов: ${deltas.length}`);
-                addLog(`Дельт > 20мс: ${over20.length}`, undefined, `Дельт > 20мс: ${over20.length}`);
-                addLog(`Аномалий (> 40мс): ${anomalies.length}`, undefined, `Аномалий (> 40мс): ${anomalies.length}`);
-                addLog(`Максимальная дельта: ${maxDelta.toFixed(2)}мс`, undefined, `Максимальная дельта: ${maxDelta.toFixed(2)}мс`);
-                
-                if (anomalies.length > 0) {
-                    const out = anomalies.slice(0, 40).map(d => d.toFixed(1)).join(', ');
-                    addLog(`Пиковой лог (>40мс): ${out}${anomalies.length > 40 ? ' ...' : ''}`, undefined, `Пиковой лог (>40мс): ${out}${anomalies.length > 40 ? ' ...' : ''}`);
-                } else {
-                    addLog('Эфир абсолютно чист.', undefined, 'Эфир абсолютно чист.');
+                // Ловим только явные аномалии, игнорируем мелкий мусор
+                if (delta > 60) { 
+                    const timeFromStart = ((now - startTime) / 1000).toFixed(2);
+                    anomalies.push({ delta, timeFromStart });
                 }
                 
-                setTimeout(() => {
-                    setExperimentStarted(false);
-                    setCountdown(null);
-                }, 3000);
-            }
-        };
-        requestAnimationFrame(sense);
-    }, 100);
+                lastTime = now;
+                
+                // Крутим осциллограф 60 секунд
+                if (now - startTime < 60000) {
+                    requestAnimationFrame(sense);
+                } else {
+                    isRunning = false;
+                    killWorkers();
+                    addLog("СЕАНС ЗАКРЫТ");
+                    setCountdown("СЕАНС ЗАКРЫТ");
+                    
+                    const over20 = deltas.filter(d => d > 20);
+                    const maxDelta = deltas.length > 0 ? Math.max(...deltas) : 0;
+                    addLog(`--- РЕЗУЛЬТАТ [Режим ${mode}] ---`, 'text-yellow-400 font-bold', `--- РЕЗУЛЬТАТ [Режим ${mode}] ---`);
+                    addLog(`Всего фреймов: ${deltas.length}`, undefined, `Всего фреймов: ${deltas.length}`);
+                    addLog(`Дельт > 20мс: ${over20.length}`, undefined, `Дельт > 20мс: ${over20.length}`);
+                    addLog(`Максимальная дельта: ${maxDelta.toFixed(2)}мс`, undefined, `Максимальная дельта: ${maxDelta.toFixed(2)}мс`);
+                    
+                    if (anomalies.length > 0) {
+                        addLog(`--- НАЙДЕНО АНОМАЛИЙ (>60мс): ${anomalies.length} ---`, 'text-yellow-400 font-bold', `--- НАЙДЕНО АНОМАЛИЙ (>60мс): ${anomalies.length} ---`);
+                        anomalies.forEach((a, i) => {
+                            if (i < 50) {
+                                addLog(`АНОМАЛИЯ: ${a.delta.toFixed(1)} мс (секунда: ${a.timeFromStart})`, 'text-yellow-400', `АНОМАЛИЯ: ${a.delta.toFixed(1)} мс (секунда: ${a.timeFromStart})`);
+                            }
+                        });
+                        if (anomalies.length > 50) addLog(`... и еще ${anomalies.length - 50} скрыто`, undefined, `... и еще ${anomalies.length - 50} скрыто`);
+                    } else {
+                        addLog("Эфир абсолютно чист (>60мс не найдено).", 'text-green-400', "Эфир абсолютно чист (>60мс не найдено).");
+                    }
+                }
+            };
+            requestAnimationFrame(sense);
+        }, 100);
+    }
   };
 
   return (
@@ -417,6 +400,29 @@ export default function App() {
               >
                 <Radio size={16} /> Передатчик (Отправить СМС)
               </button>
+              <div className="flex flex-col gap-2 p-3 bg-black/50 border border-[#00FF41]/20">
+                 <div className="text-[10px] uppercase opacity-70">Режим приемника (Сенсор):</div>
+                 <div className="flex gap-2">
+                   <button 
+                     onClick={() => setReceiverMode('0')} 
+                     className={`flex-1 py-3 font-bold text-[10px] uppercase border transition-all ${receiverMode === '0' ? 'bg-[#00FF41] text-black border-[#00FF41]' : 'border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/20'}`}
+                   >
+                     "0" (Холод)
+                   </button>
+                   <button 
+                     onClick={() => setReceiverMode('0-1')} 
+                     className={`flex-1 py-3 font-bold text-[10px] uppercase border transition-all ${receiverMode === '0-1' ? 'bg-[#00FF41] text-black border-[#00FF41]' : 'border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/20'}`}
+                   >
+                     "0-1" (Прогрев)
+                   </button>
+                   <button 
+                     onClick={() => setReceiverMode('1')} 
+                     className={`flex-1 py-3 font-bold text-[10px] uppercase border transition-all ${receiverMode === '1' ? 'bg-[#00FF41] text-black border-[#00FF41]' : 'border-[#00FF41]/50 text-[#00FF41] hover:bg-[#00FF41]/20'}`}
+                   >
+                     "1" (Резонанс)
+                   </button>
+                 </div>
+              </div>
               <button 
                 onClick={() => prepareExperiment('receiver')}
                 className="w-full py-3 bg-[#055] border border-[#00FF41] text-[#00FF41] font-bold uppercase text-[10px] sm:text-xs active:scale-95 transition-all flex items-center justify-center gap-2 hover:bg-[#088]"
@@ -425,29 +431,6 @@ export default function App() {
               </button>
             </div>
           </div>
-        )}
-
-        {!experimentStarted && (
-           <div className="border border-[#00FF41]/30 bg-[#0A0A0A] p-4 shrink-0 flex flex-col gap-3 animate-in fade-in duration-300">
-             <div className="text-[10px] uppercase opacity-50 border-b border-[#00FF41]/20 pb-2 flex justify-between">
-               <span>Локальный стресс-тест памяти (Memory Dump)</span>
-               <span className="text-yellow-400">60 sec</span>
-             </div>
-             <p className="text-[9px] opacity-60 leading-tight">
-               Приемник должен работать "молча". DOM не перерисовывается, данные пушатся только в RAM (requestAnimationFrame).
-             </p>
-             <div className="flex flex-col sm:flex-row gap-2">
-               <button onClick={() => runSensorTest('0')} className="flex-1 py-3 border border-[#00FF41] text-[#00FF41] bg-transparent hover:bg-[#00FF41] hover:text-black font-bold uppercase text-[10px] transition-all">
-                 Тест "0" (Холод)
-               </button>
-               <button onClick={() => runSensorTest('0-1')} className="flex-1 py-3 border border-yellow-400 text-yellow-400 bg-transparent hover:bg-yellow-400 hover:text-black font-bold uppercase text-[10px] transition-all">
-                 Тест "0-1" (Прогрев)
-               </button>
-               <button onClick={() => runSensorTest('1')} className="flex-1 py-3 border border-red-500 text-red-500 bg-transparent hover:bg-red-500 hover:text-black font-bold uppercase text-[10px] transition-all">
-                 Тест "1" (Резонанс)
-               </button>
-             </div>
-           </div>
         )}
 
         {countdown !== null && (
