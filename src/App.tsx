@@ -294,6 +294,72 @@ export default function App() {
     slotIntervalRef.current = slotInterval as any;
   };
 
+  const runSensorTest = (mode: '0' | '0-1' | '1') => {
+    addLog(`СТАРТ ЛОКАЛЬНОГО ТЕСТА СЕНСОРА: [${mode}]. Длительность 1 мин. Экран будет заморожен.`);
+    setExperimentStarted(true);
+    setCountdown('СБОР ДАННЫХ...');
+    setCurrentBitInfo(`Режим ${mode}: интерфейс не обновляется`);
+    killWorkers();
+    
+    // Give UI a moment to update
+    setTimeout(() => {
+        let isRunning = true;
+        const deltas: number[] = [];
+        const startTime = performance.now();
+        let lastTime = startTime;
+        
+        if (mode === '1') {
+            spawnWorkers();
+        } else if (mode === '0-1') {
+            spawnWorkers();
+            setTimeout(() => {
+                killWorkers();
+                addLog('>> Прогрев завершен, переход в холод', 'text-yellow-400 font-bold', '>> Прогрев завершен, переход в холод');
+            }, 8000);
+        }
+        
+        const sense = () => {
+            if (!isRunning) return;
+            const now = performance.now();
+            const delta = now - lastTime;
+            lastTime = now;
+            deltas.push(delta);
+            
+            if (now - startTime < 60000) {
+                requestAnimationFrame(sense);
+            } else {
+                isRunning = false;
+                killWorkers();
+                setCountdown("ТЕСТ ЗАВЕРШЕН");
+                setCurrentBitInfo('');
+                
+                const anomalies = deltas.filter(d => d > 40);
+                const over20 = deltas.filter(d => d > 20);
+                const maxDelta = deltas.length > 0 ? Math.max(...deltas) : 0;
+                
+                addLog(`--- РЕЗУЛЬТАТ ТЕСТА [${mode}] ---`, 'text-yellow-400 font-bold', `--- РЕЗУЛЬТАТ ТЕСТА [${mode}] ---`);
+                addLog(`Всего фреймов: ${deltas.length}`, undefined, `Всего фреймов: ${deltas.length}`);
+                addLog(`Дельт > 20мс: ${over20.length}`, undefined, `Дельт > 20мс: ${over20.length}`);
+                addLog(`Аномалий (> 40мс): ${anomalies.length}`, undefined, `Аномалий (> 40мс): ${anomalies.length}`);
+                addLog(`Максимальная дельта: ${maxDelta.toFixed(2)}мс`, undefined, `Максимальная дельта: ${maxDelta.toFixed(2)}мс`);
+                
+                if (anomalies.length > 0) {
+                    const out = anomalies.slice(0, 40).map(d => d.toFixed(1)).join(', ');
+                    addLog(`Пиковой лог (>40мс): ${out}${anomalies.length > 40 ? ' ...' : ''}`, undefined, `Пиковой лог (>40мс): ${out}${anomalies.length > 40 ? ' ...' : ''}`);
+                } else {
+                    addLog('Эфир абсолютно чист.', undefined, 'Эфир абсолютно чист.');
+                }
+                
+                setTimeout(() => {
+                    setExperimentStarted(false);
+                    setCountdown(null);
+                }, 3000);
+            }
+        };
+        requestAnimationFrame(sense);
+    }, 100);
+  };
+
   return (
     <div className={`min-h-[100dvh] flex flex-col ${flash ? 'bg-[#330000] selection:bg-black selection:text-red-500' : 'bg-[#050505] selection:bg-[#00FF41] selection:text-black'} text-[#00FF41] font-mono overflow-hidden transition-colors duration-100 ease-in-out`}>
       <header className="h-16 shrink-0 border-b border-[#00FF41]/30 flex items-center justify-between px-4 sm:px-8 bg-black/40 backdrop-blur-md z-10">
@@ -380,6 +446,29 @@ export default function App() {
               </button>
             </div>
           </div>
+        )}
+
+        {!experimentStarted && (
+           <div className="border border-[#00FF41]/30 bg-[#0A0A0A] p-4 shrink-0 flex flex-col gap-3 animate-in fade-in duration-300">
+             <div className="text-[10px] uppercase opacity-50 border-b border-[#00FF41]/20 pb-2 flex justify-between">
+               <span>Локальный стресс-тест памяти (Memory Dump)</span>
+               <span className="text-yellow-400">60 sec</span>
+             </div>
+             <p className="text-[9px] opacity-60 leading-tight">
+               Приемник должен работать "молча". DOM не перерисовывается, данные пушатся только в RAM (requestAnimationFrame).
+             </p>
+             <div className="flex flex-col sm:flex-row gap-2">
+               <button onClick={() => runSensorTest('0')} className="flex-1 py-3 border border-[#00FF41] text-[#00FF41] bg-transparent hover:bg-[#00FF41] hover:text-black font-bold uppercase text-[10px] transition-all">
+                 Тест "0" (Холод)
+               </button>
+               <button onClick={() => runSensorTest('0-1')} className="flex-1 py-3 border border-yellow-400 text-yellow-400 bg-transparent hover:bg-yellow-400 hover:text-black font-bold uppercase text-[10px] transition-all">
+                 Тест "0-1" (Прогрев)
+               </button>
+               <button onClick={() => runSensorTest('1')} className="flex-1 py-3 border border-red-500 text-red-500 bg-transparent hover:bg-red-500 hover:text-black font-bold uppercase text-[10px] transition-all">
+                 Тест "1" (Резонанс)
+               </button>
+             </div>
+           </div>
         )}
 
         {countdown !== null && (
