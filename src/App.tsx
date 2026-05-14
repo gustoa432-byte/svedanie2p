@@ -215,83 +215,62 @@ export default function App() {
   };
 
   const runModemSequence = () => {
-    let currentBitIndex = 0;
-    const len = binaryMsgRef.current.length;
-    let lagDetectedInSlot = false;
-    
-    // Safety session timer (1 minute as requested)
-    if (!isSenderRef.current) {
-        setTimeout(() => {
-            if (workersRef.current.length || slotIntervalRef.current) {
-                addLog("ТАЙМЕР ПРИЕМНИКА: Истекла 1 минута. Завершение сессии.", 'text-red-500 font-bold');
+    if (isSenderRef.current) {
+        addLog("СТАРТ ПЕРЕДАТЧИКА (Метроном). Удар каждую секунду.");
+        spawnWorkers(); // Стартовый разгон
+        
+        let beats = 0;
+        const metronome = setInterval(() => {
+            if (beats >= 60) { // Бьем ровно 1 минуту
+                clearInterval(metronome);
                 killWorkers();
-                if (slotIntervalRef.current) clearInterval(slotIntervalRef.current);
+                addLog("СЕАНС ЗАКРЫТ");
                 setCountdown("СЕАНС ЗАКРЫТ");
+                return;
             }
-        }, 60000);
-    }
-    
-    if (!isSenderRef.current) {
+            
+            // ТОТ САМЫЙ КВАНТОВЫЙ УДАР (Сброс и моментальный рестарт)
+            killWorkers(); 
+            spawnWorkers(); 
+            
+            // Визуализация удара
+            setFlash(true);
+            setTimeout(() => setFlash(false), 100);
+            
+            beats++;
+        }, 1000);
+        slotIntervalRef.current = metronome as any;
+
+    } else {
+        addLog("СТАРТ ПРИЕМНИКА (Осциллограф). Слушаю эфир...");
         let lastTime = performance.now();
+        let startTime = performance.now();
+        let isRunning = true;
+        
         const sense = () => {
+            if (!isRunning) return;
             const now = performance.now();
-            if (now - lastTime > 40) {
-                lagDetectedInSlot = true;
+            const delta = now - lastTime;
+            
+            // Ловим только явные аномалии, игнорируем мелкий мусор
+            if (delta > 60) { 
+                const timeFromStart = ((now - startTime) / 1000).toFixed(2);
+                addLog(`АНОМАЛИЯ: ${delta.toFixed(1)} мс (секунда: ${timeFromStart})`, 'text-yellow-400 font-bold', `АНОМАЛИЯ: ${delta.toFixed(1)} мс (секунда: ${timeFromStart})`);
             }
+            
             lastTime = now;
-            if (currentBitIndex < len) {
+            
+            // Крутим осциллограф 60 секунд
+            if (now - startTime < 60000) {
                 requestAnimationFrame(sense);
+            } else {
+                isRunning = false;
+                addLog("СЕАНС ЗАКРЫТ");
+                setCountdown("СЕАНС ЗАКРЫТ");
             }
         };
         requestAnimationFrame(sense);
     }
-
-    const slotInterval = setInterval(() => {
-        if (currentBitIndex >= len) {
-            clearInterval(slotInterval);
-            killWorkers();
-            setCountdown("СЕАНС ЗАКРЫТ");
-            if (!isSenderRef.current) {
-                const finalStr = binToText(receivedBitsRef.current);
-                addLog(
-                  <span className="text-yellow-400 font-bold">РЕЗУЛЬТАТ: {finalStr} ({receivedBitsRef.current})</span>, 
-                  undefined, 
-                  `РЕЗУЛЬТАТ: ${finalStr} ({receivedBitsRef.current})`
-                );
-            }
-            return;
-        }
-
-        const currentBit = binaryMsgRef.current[currentBitIndex];
-        setCurrentBitInfo(`БИТ ${currentBitIndex + 1}/${len}`);
-        
-        if (isSenderRef.current) {
-            addLog(`СЛОТ [${currentBitIndex}]: Разгон... (цель: ${currentBit})`);
-            spawnWorkers(); 
-            
-            if (currentBit === '1') {
-                setTimeout(() => {
-                    addLog('>> КОЛЛАПС (передача 1)', 'text-red-500 font-bold');
-                    killWorkers();
-                    setFlash(true);
-                    setTimeout(() => setFlash(false), 200);
-                }, SLOT_TIME - 500);
-            }
-        } else {
-            spawnWorkers();
-            setTimeout(() => {
-                const bitValue = lagDetectedInSlot ? '1' : '0';
-                receivedBitsRef.current += bitValue;
-                addLog(`СЛОТ [${currentBitIndex}]: Зафиксирован бит [${bitValue}]`);
-                setCurrentBitInfo(receivedBitsRef.current);
-                lagDetectedInSlot = false;
-            }, SLOT_TIME - 100);
-        }
-
-        currentBitIndex++;
-    }, SLOT_TIME);
-
-    slotIntervalRef.current = slotInterval as any;
   };
 
   const runSensorTest = (mode: '0' | '0-1' | '1') => {
