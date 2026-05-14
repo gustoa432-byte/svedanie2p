@@ -1,12 +1,28 @@
 import { useState, useEffect, useRef } from 'react';
 import { Peer, DataConnection } from 'peerjs';
-import { Activity, ShieldAlert, Cpu, Radio, Zap, AlertTriangle, Copy, CheckCheck } from 'lucide-react';
+import { Activity, ShieldAlert, Cpu, Radio, Zap, AlertTriangle, Copy, CheckCheck, Save } from 'lucide-react';
 
 interface LogEntry {
   id: number;
   time: string;
   msg: React.ReactNode;
+  raw: string;
   color?: string;
+}
+
+const SLOT_TIME = 5000;
+
+function textToBin(text: string) {
+    return text.split('').map(c => c.charCodeAt(0).toString(2).padStart(8, '0')).join('');
+}
+
+function binToText(bin: string) {
+    let txt = '';
+    for (let i = 0; i < bin.length; i += 8) {
+        const charCode = parseInt(bin.substring(i, i + 8), 2);
+        if (charCode > 0) txt += String.fromCharCode(charCode);
+    }
+    return txt;
 }
 
 export default function App() {
@@ -16,9 +32,11 @@ export default function App() {
   const [logs, setLogs] = useState<LogEntry[]>([]);
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [experimentStarted, setExperimentStarted] = useState<boolean>(false);
-  const [countdown, setCountdown] = useState<number | 'ПУСК!' | null>(null);
+  const [countdown, setCountdown] = useState<number | string | null>(null);
+  const [currentBitInfo, setCurrentBitInfo] = useState<string>('');
   const [flash, setFlash] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
+  const [msgInput, setMsgInput] = useState<string>('');
 
   const peerRef = useRef<Peer | null>(null);
   const connRef = useRef<DataConnection | null>(null);
@@ -26,13 +44,17 @@ export default function App() {
   const timeOffsetRef = useRef<number>(0);
   const isSenderRef = useRef<boolean>(false);
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const binaryMsgRef = useRef<string>("");
+  const receivedBitsRef = useRef<string>("");
+  const slotIntervalRef = useRef<number | null>(null);
 
   const logCounter = useRef<number>(0);
 
-  const addLog = (msg: React.ReactNode, color?: string) => {
+  const addLog = (msg: React.ReactNode, color?: string, raw?: string) => {
     const time = new Date().toLocaleTimeString();
     logCounter.current += 1;
-    setLogs((prev) => [...prev, { id: logCounter.current, time, msg, color }]);
+    const rawText = raw || (typeof msg === 'string' ? msg : 'Log Entry');
+    setLogs((prev) => [...prev, { id: logCounter.current, time, msg, raw: rawText, color }]);
   };
 
   const handleCopyId = () => {
@@ -43,6 +65,17 @@ export default function App() {
     }
   };
 
+  const downloadLog = () => {
+    const text = logs.map(l => `[${l.time}] ${l.raw}`).join('\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url;
+    a.download = `quantum_bridge_log_${Date.now()}.txt`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
+
   useEffect(() => {
     if (logContainerRef.current) {
       logContainerRef.current.scrollTop = logContainerRef.current.scrollHeight;
@@ -51,11 +84,13 @@ export default function App() {
 
   useEffect(() => {
     const isWss = window.location.protocol === 'https:';
+    
     const peer = new Peer({
       host: window.location.hostname,
       port: window.location.port ? Number(window.location.port) : (isWss ? 443 : 80),
       path: '/peerjs',
-      secure: isWss
+      secure: isWss,
+      debug: 3
     });
     peerRef.current = peer;
 
@@ -67,7 +102,6 @@ export default function App() {
     peer.on('error', (err) => {
       setStatus(`Ошибка соединения!`);
       addLog(`PeerJS error: ${err.type} - ${err.message}`, 'text-red-500');
-      // Some networks block WebRTC or the default PeerJS server is down.
     });
 
     peer.on('connection', (c) => {
@@ -78,7 +112,8 @@ export default function App() {
 
     return () => {
       peer.destroy();
-      workersRef.current.forEach(w => w.terminate());
+      killWorkers();
+      if (slotIntervalRef.current) clearInterval(slotIntervalRef.current);
     };
   }, []);
 
@@ -99,9 +134,9 @@ export default function App() {
         const now = Date.now();
         const rtt = (now - data.sent) / 2;
         timeOffsetRef.current = data.recv - data.sent - rtt;
-        addLog(`Синхронизация: Offset ${timeOffsetRef.current}ms, RTT ${rtt}ms`);
+        addLog(`Синхронизация NTP: Offset ${timeOffsetRef.current}ms, RTT ${rtt}ms`);
       } else if (data.type === 'start') {
-        executeCountdown(data.startTime, data.role === 'sender' ? 'receiver' : 'sender');
+        executeCountdown(data.startTime, data.role === 'sender' ? 'receiver' : 'sender', data.msgLength);
       }
     });
   };
@@ -116,14 +151,26 @@ export default function App() {
 
   const prepareExperiment = (role: 'sender' | 'receiver') => {
     if (!connRef.current) return;
-    const startTime = Date.now() + 20000;
-    connRef.current.send({ type: 'start', startTime, role });
-    executeCountdown(startTime, role);
+    const rawMsg = msgInput || "1";
+    // user protocol: limit chars or adjust length. Let's just limit to 4 if specified to avoid too long tests, but standard length is fine.
+    const binary = textToBin(rawMsg.slice(0, 4));
+    binaryMsgRef.current = binary;
+
+    const startTime = Date.now() + 20000; // 20 sec delay as requested
+    connRef.current.send({ type: 'start', startTime, role, msgLength: binary.length });
+    executeCountdown(startTime, role, binary.length);
   };
 
-  const executeCountdown = (targetTime: number, role: 'sender' | 'receiver') => {
+  const executeCountdown = (targetTime: number, role: 'sender' | 'receiver', bitLength: number) => {
     isSenderRef.current = role === 'sender';
     setExperimentStarted(true);
+    receivedBitsRef.current = "";
+    
+    if (isSenderRef.current) {
+        addLog(`Готовлю к отправке: ${binaryMsgRef.current}`);
+    } else {
+        binaryMsgRef.current = "0".repeat(bitLength);
+    }
     
     const timerInterval = setInterval(() => {
       const now = Date.now() + timeOffsetRef.current;
@@ -131,32 +178,27 @@ export default function App() {
       
       if (diff <= 0) {
         clearInterval(timerInterval);
-        setCountdown('ПУСК!');
-        runPhysics();
+        setCountdown('ЭФИР ОТКРЫТ');
+        runModemSequence();
       } else {
-        setCountdown(diff);
+        setCountdown(`T-${diff}`);
         if (diff === 10) {
           addLog(
             <span className="font-bold inline-flex items-center gap-1 flex-wrap">
-              <AlertTriangle size={14} /> ВНИМАНИЕ: ВКЛЮЧИТЕ АВИАРЕЖИМ СЕЙЧАС!
+              <AlertTriangle size={14} /> !!! ПЕРЕХОД В АВИАРЕЖИМ !!!
             </span>,
-            'text-yellow-400'
+            'text-yellow-400',
+            '!!! ПЕРЕХОД В АВИАРЕЖИМ !!!'
           );
         }
       }
     }, 100);
   };
 
-  const runPhysics = () => {
-    addLog('Разогрев ядер...', 'text-blue-400');
+  const spawnWorkers = () => {
+    if (workersRef.current.length > 0) return;
     const cores = navigator.hardwareConcurrency || 4;
-    
-    const workerCode = `
-      onmessage = function() {
-        let x = 0;
-        while(true) { x ^= Math.random(); }
-      };
-    `;
+    const workerCode = `onmessage = function() { let x=0; while(true) { x ^= Math.random(); } };`;
     const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
     const workerUrl = URL.createObjectURL(workerBlob);
 
@@ -165,65 +207,117 @@ export default function App() {
         w.postMessage('go');
         workersRef.current.push(w);
     }
+  };
 
-    if (isSenderRef.current) {
+  const killWorkers = () => {
+    workersRef.current.forEach(w => w.terminate());
+    workersRef.current = [];
+  };
+
+  const runModemSequence = () => {
+    let currentBitIndex = 0;
+    const len = binaryMsgRef.current.length;
+    let lagDetectedInSlot = false;
+    
+    // Safety session timer (1 minute as requested)
+    if (!isSenderRef.current) {
         setTimeout(() => {
-            addLog('КВАНТОВЫЙ СБРОС (1 -> 0)', 'text-red-500 font-bold');
-            workersRef.current.forEach(w => w.terminate());
-            workersRef.current = [];
-            setFlash(true);
-            setTimeout(() => setFlash(false), 200);
-        }, 15000);
-    } else {
-        addLog('Сенсор активен. Слушаю эфир...', 'text-green-400');
+            if (workersRef.current.length || slotIntervalRef.current) {
+                addLog("ТАЙМЕР ПРИЕМНИКА: Истекла 1 минута. Завершение сессии.", 'text-red-500 font-bold');
+                killWorkers();
+                if (slotIntervalRef.current) clearInterval(slotIntervalRef.current);
+                setCountdown("СЕАНС ЗАКРЫТ");
+            }
+        }, 60000);
+    }
+    
+    if (!isSenderRef.current) {
         let lastTime = performance.now();
-        
         const sense = () => {
             const now = performance.now();
-            const delta = now - lastTime;
-            lastTime = now;
-
-            if (delta > 40) {
-                addLog(<span className="font-bold">⚡ АНОМАЛИЯ: {delta.toFixed(2)}ms</span>, 'text-red-500');
+            if (now - lastTime > 40) {
+                lagDetectedInSlot = true;
             }
-            if (workersRef.current.length > 0) {
+            lastTime = now;
+            if (currentBitIndex < len) {
                 requestAnimationFrame(sense);
             }
         };
         requestAnimationFrame(sense);
     }
+
+    const slotInterval = setInterval(() => {
+        if (currentBitIndex >= len) {
+            clearInterval(slotInterval);
+            killWorkers();
+            setCountdown("СЕАНС ЗАКРЫТ");
+            if (!isSenderRef.current) {
+                const finalStr = binToText(receivedBitsRef.current);
+                addLog(
+                  <span className="text-yellow-400 font-bold">РЕЗУЛЬТАТ: {finalStr} ({receivedBitsRef.current})</span>, 
+                  undefined, 
+                  `РЕЗУЛЬТАТ: ${finalStr} ({receivedBitsRef.current})`
+                );
+            }
+            return;
+        }
+
+        const currentBit = binaryMsgRef.current[currentBitIndex];
+        setCurrentBitInfo(`БИТ ${currentBitIndex + 1}/${len}`);
+        
+        if (isSenderRef.current) {
+            addLog(`СЛОТ [${currentBitIndex}]: Разгон... (цель: ${currentBit})`);
+            spawnWorkers(); 
+            
+            if (currentBit === '1') {
+                setTimeout(() => {
+                    addLog('>> КОЛЛАПС (передача 1)', 'text-red-500 font-bold');
+                    killWorkers();
+                    setFlash(true);
+                    setTimeout(() => setFlash(false), 200);
+                }, SLOT_TIME - 500);
+            }
+        } else {
+            spawnWorkers();
+            setTimeout(() => {
+                const bitValue = lagDetectedInSlot ? '1' : '0';
+                receivedBitsRef.current += bitValue;
+                addLog(`СЛОТ [${currentBitIndex}]: Зафиксирован бит [${bitValue}]`);
+                setCurrentBitInfo(receivedBitsRef.current);
+                lagDetectedInSlot = false;
+            }, SLOT_TIME - 100);
+        }
+
+        currentBitIndex++;
+    }, SLOT_TIME);
+
+    slotIntervalRef.current = slotInterval as any;
   };
 
   return (
-    <div className={`min-h-[100dvh] flex flex-col ${flash ? 'bg-red-900 selection:bg-black selection:text-red-500' : 'bg-[#050505] selection:bg-[#00FF41] selection:text-black'} text-[#00FF41] font-mono overflow-hidden transition-colors duration-100 ease-in-out`}>
+    <div className={`min-h-[100dvh] flex flex-col ${flash ? 'bg-[#330000] selection:bg-black selection:text-red-500' : 'bg-[#050505] selection:bg-[#00FF41] selection:text-black'} text-[#00FF41] font-mono overflow-hidden transition-colors duration-100 ease-in-out`}>
       <header className="h-16 shrink-0 border-b border-[#00FF41]/30 flex items-center justify-between px-4 sm:px-8 bg-black/40 backdrop-blur-md z-10">
         <div className="flex items-center gap-3">
           <div className="w-2 h-2 sm:w-3 sm:h-3 bg-[#00FF41] rounded-full animate-pulse"></div>
-          <h1 className="text-sm sm:text-xl font-bold tracking-widest uppercase">Quantum Bridge // v1.0.4</h1>
+          <h1 className="text-sm sm:text-xl font-bold tracking-widest uppercase">Quantum Modem // v2.0</h1>
         </div>
         <div className="hidden sm:flex gap-8 text-xs opacity-70 uppercase tracking-tighter">
           <div>Sys: <span className="text-white">Ready</span></div>
         </div>
       </header>
 
-      <div className="flex-1 flex flex-col p-4 sm:p-6 gap-6 overflow-y-auto w-full max-w-xl mx-auto pb-safe">
+      <div className="flex-1 flex flex-col p-4 sm:p-6 gap-4 overflow-y-auto w-full max-w-xl mx-auto pb-safe">
         <div className="border border-[#00FF41]/30 bg-[#0A0A0A] p-4 shrink-0">
           <div className="text-[10px] uppercase opacity-50 mb-2 border-b border-[#00FF41]/20 pb-2 flex items-center gap-2">
-            <Activity size={14} /> System Status
+            <Activity size={14} /> Системный статус
           </div>
           <div className="font-bold text-sm sm:text-lg truncate">{status}</div>
-          <div className="mt-4 flex gap-1">
-            <div className="h-1 flex-1 bg-[#00FF41]/40"></div>
-            <div className="h-1 flex-1 bg-[#00FF41]/40"></div>
-            <div className="h-1 flex-1 bg-[#00FF41]"></div>
-            <div className="h-1 flex-1 bg-[#00FF41]/10"></div>
-          </div>
         </div>
 
         {!isConnected && (
-          <div className="bg-[#050505] flex flex-col gap-6 animate-in fade-in zoom-in duration-300 shrink-0">
+          <div className="bg-[#050505] flex flex-col gap-4 animate-in fade-in zoom-in duration-300 shrink-0">
             <div className="border border-[#00FF41]/30 bg-[#0A0A0A] p-4">
-              <p className="text-[10px] uppercase opacity-50 mb-2 border-b border-[#00FF41]/20 pb-2">Local Identity</p>
+              <p className="text-[10px] uppercase opacity-50 mb-2 border-b border-[#00FF41]/20 pb-2">Локальный узел</p>
               <div className="flex items-center justify-between gap-2">
                 <div className="text-sm sm:text-base font-bold truncate select-all">{peerId}</div>
                 <button 
@@ -236,28 +330,25 @@ export default function App() {
               </div>
             </div>
             
-            <div>
-              <h3 className="text-[10px] uppercase tracking-widest opacity-50 mb-4 border-b border-[#00FF41]/20 pb-2">Connection Setup</h3>
-              <div className="flex flex-col sm:flex-row gap-3">
-                <div className="flex flex-col gap-1 flex-1">
-                  <label className="text-[9px] uppercase">Target Node ID</label>
-                  <input 
-                    type="text" 
-                    value={targetId}
-                    onChange={(e) => setTargetId(e.target.value)}
-                    placeholder="Enter remote hash..."
-                    className="w-full bg-[#111] border border-[#00FF41]/40 px-3 py-3 sm:py-2 text-xs sm:text-sm focus:outline-none focus:border-[#00FF41] placeholder:opacity-30 text-[#00FF41]"
-                    autoComplete="off"
-                    autoCorrect="off"
-                    spellCheck="false"
-                  />
-                </div>
+            <div className="border border-[#00FF41]/30 bg-[#0A0A0A] p-4">
+              <h3 className="text-[10px] uppercase tracking-widest opacity-50 mb-4 border-b border-[#00FF41]/20 pb-2">Соединение</h3>
+              <div className="flex flex-col gap-3">
+                <input 
+                  type="text" 
+                  value={targetId}
+                  onChange={(e) => setTargetId(e.target.value)}
+                  placeholder="Введи ID второго узла сюда..."
+                  className="w-full bg-[#111] border border-[#00FF41]/40 px-3 py-3 text-sm focus:outline-none focus:border-[#00FF41] placeholder:opacity-30 text-[#00FF41]"
+                  autoComplete="off"
+                  autoCorrect="off"
+                  spellCheck="false"
+                />
                 <button 
                   onClick={connectToPeer}
                   disabled={!targetId}
-                  className="bg-[#00FF41] text-black px-6 py-3 sm:py-2 font-bold text-xs hover:bg-[#00CC33] active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all uppercase sm:mt-[18px]"
+                  className="bg-[#00FF41] text-black w-full py-3 font-bold text-xs hover:bg-[#00CC33] active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all uppercase"
                 >
-                  Establish Connection
+                  Создать линк
                 </button>
               </div>
             </div>
@@ -265,44 +356,59 @@ export default function App() {
         )}
 
         {isConnected && !experimentStarted && (
-          <div className="flex flex-col items-center justify-center py-8 gap-6 animate-in fade-in duration-300">
-            <div className="text-center z-10 w-full max-w-md">
-              <div className="text-[12px] uppercase tracking-[0.4em] opacity-40 mb-6">Select Operation Mode</div>
-              <div className="flex flex-col sm:flex-row gap-4 w-full justify-center">
-                <button 
-                  onClick={() => prepareExperiment('sender')}
-                  className="flex-1 px-4 sm:px-8 py-4 sm:py-3 border border-[#00FF41] text-[#00FF41] bg-transparent hover:bg-[#00FF41] hover:text-black font-bold uppercase text-[10px] sm:text-xs transition-all active:scale-95 whitespace-nowrap flex items-center justify-center gap-2"
-                >
-                  <Radio size={16} /> Transmit Mode <span className="opacity-50">0-1-0</span>
-                </button>
-                <button 
-                  onClick={() => prepareExperiment('receiver')}
-                  className="flex-1 px-4 sm:px-8 py-4 sm:py-3 bg-[#00FF41]/10 border border-[#00FF41] text-[#00FF41] hover:bg-[#00FF41]/20 font-bold uppercase text-[10px] sm:text-xs active:scale-95 transition-all whitespace-nowrap flex items-center justify-center gap-2"
-                >
-                  <ShieldAlert size={16} /> Receive Mode <span className="opacity-50">1-1</span>
-                </button>
-              </div>
+          <div className="flex flex-col border border-[#00FF41]/30 bg-[#0A0A0A] p-4 gap-4 animate-in fade-in duration-300">
+            <input
+              type="text"
+              value={msgInput}
+              onChange={e => setMsgInput(e.target.value)}
+              placeholder="Сообщение (например: HI)"
+              maxLength={4}
+              className="w-full bg-[#111] border border-[#00FF41]/40 px-3 py-3 text-sm focus:outline-none focus:border-[#00FF41] placeholder:opacity-30 text-[#00FF41]"
+            />
+            <div className="flex flex-col gap-3">
+              <button 
+                onClick={() => prepareExperiment('sender')}
+                className="w-full py-3 bg-[#00FF41] text-black font-bold uppercase text-[10px] sm:text-xs transition-all active:scale-95 flex items-center justify-center gap-2"
+              >
+                <Radio size={16} /> Передатчик (Отправить СМС)
+              </button>
+              <button 
+                onClick={() => prepareExperiment('receiver')}
+                className="w-full py-3 bg-[#055] border border-[#00FF41] text-[#00FF41] font-bold uppercase text-[10px] sm:text-xs active:scale-95 transition-all flex items-center justify-center gap-2 hover:bg-[#088]"
+              >
+                <ShieldAlert size={16} /> Приемник (Слушать эфир)
+              </button>
             </div>
           </div>
         )}
 
         {countdown !== null && (
-          <div className="flex-1 flex flex-col items-center justify-center relative min-h-[200px] animate-in zoom-in duration-200 shrink-0">
-            <div className="absolute inset-0 opacity-[0.03] pointer-events-none" style={{ backgroundImage: 'radial-gradient(#00FF41 1px, transparent 1px)', backgroundSize: '20px 20px' }}></div>
-            <div className="text-center z-10">
-              <div className="text-[12px] uppercase tracking-[0.4em] opacity-40 mb-2">Experiment Countdown</div>
-              <div className="text-[120px] sm:text-[160px] leading-none font-bold tracking-tighter text-red-600 drop-shadow-[0_0_15px_rgba(220,38,38,0.4)] blink-slow">
-                {countdown}
-              </div>
+          <div className="flex flex-col items-center justify-center relative min-h-[150px] animate-in zoom-in duration-200 shrink-0 border border-[#00FF41]/30 bg-[#0A0A0A] py-8">
+            <div className="text-[30px] sm:text-[40px] leading-none font-bold tracking-tighter text-red-600 drop-shadow-[0_0_10px_rgba(220,38,38,0.4)] blink-slow text-center mb-4">
+              {countdown}
             </div>
+            {currentBitInfo && (
+              <div className="text-[20px] sm:text-[24px] text-yellow-400 tracking-[5px] text-center font-bold">
+                {currentBitInfo}
+              </div>
+            )}
           </div>
         )}
 
       </div>
       
       <footer className="h-48 sm:h-64 shrink-0 border-t border-[#00FF41]/30 bg-black p-4 overflow-hidden relative flex flex-col w-full">
-        <div className="text-[9px] uppercase opacity-40 mb-2 shrink-0">Live Event Journal</div>
-        <div ref={logContainerRef} className="flex flex-col gap-1 text-[11px] leading-tight font-mono overflow-y-auto h-full pt-2 flex-1 pb-4 scroll-smooth">
+        <div className="flex justify-between items-center mb-2 shrink-0 border-b border-[#00FF41]/20 pb-2">
+            <div className="text-[9px] uppercase opacity-40">Терминал логов</div>
+            <button
+                onClick={downloadLog}
+                className="text-[10px] font-bold text-[#00FF41] hover:text-[#fff] transition-colors flex items-center gap-1 bg-[#00FF41]/10 px-2 py-1 rounded"
+                title="Сохранить лог"
+            >
+                <Save size={12} /> СОХРАНИТИТЬ
+            </button>
+        </div>
+        <div ref={logContainerRef} className="flex flex-col gap-1 text-[11px] leading-tight font-mono overflow-y-auto h-full pt-1 flex-1 pb-4 scroll-smooth">
           {logs.map((log) => (
             <div key={log.id} className={`${log.color || 'text-[#00FF41]'}`}>
               <span className="opacity-40 mr-2">[{log.time}]</span>
@@ -310,12 +416,8 @@ export default function App() {
             </div>
           ))}
         </div>
-        <div className="absolute top-4 right-4 flex items-center gap-2 bg-black pl-2">
-           <div className="w-2 h-2 rounded-full bg-red-600 animate-pulse"></div>
-           <span className="text-[10px] uppercase text-red-600 font-bold hidden sm:inline">Live Telemetry Rec</span>
-           <span className="text-[10px] uppercase text-red-600 font-bold sm:hidden">Rec</span>
-        </div>
       </footer>
     </div>
   );
 }
+
