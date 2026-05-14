@@ -33,6 +33,7 @@ export default function App() {
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [experimentStarted, setExperimentStarted] = useState<boolean>(false);
   const [countdown, setCountdown] = useState<number | string | null>(null);
+  const [testData, setTestData] = useState<number[] | null>(null);
   const [currentBitInfo, setCurrentBitInfo] = useState<string>('');
   const [flash, setFlash] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
@@ -46,6 +47,7 @@ export default function App() {
   const isSenderRef = useRef<boolean>(false);
   const receiverModeRef = useRef<'0' | '0-1' | '1'>('0');
   const logContainerRef = useRef<HTMLDivElement>(null);
+  const canvasRef = useRef<HTMLCanvasElement>(null);
   const binaryMsgRef = useRef<string>("");
   const receivedBitsRef = useRef<string>("");
   const slotIntervalRef = useRef<number | null>(null);
@@ -138,7 +140,8 @@ export default function App() {
         timeOffsetRef.current = data.recv - data.sent - rtt;
         addLog(`Синхронизация NTP: Offset ${timeOffsetRef.current}ms, RTT ${rtt}ms`);
       } else if (data.type === 'start') {
-        executeCountdown(data.startTime, data.role === 'sender' ? 'receiver' : 'sender', data.msgLength);
+        const targetLocal = data.startTime - timeOffsetRef.current;
+        executeCountdown(targetLocal, data.role === 'sender' ? 'receiver' : 'sender', data.msgLength);
       }
     });
   };
@@ -167,9 +170,10 @@ export default function App() {
     executeCountdown(startTime, role, binary.length);
   };
 
-  const executeCountdown = (targetTime: number, role: 'sender' | 'receiver', bitLength: number) => {
+  const executeCountdown = (localTargetTime: number, role: 'sender' | 'receiver', bitLength: number) => {
     isSenderRef.current = role === 'sender';
     setExperimentStarted(true);
+    setTestData(null);
     receivedBitsRef.current = "";
     
     if (isSenderRef.current) {
@@ -179,8 +183,8 @@ export default function App() {
     }
     
     const timerInterval = setInterval(() => {
-      const now = Date.now() + timeOffsetRef.current;
-      const diff = Math.round((targetTime - now) / 1000);
+      const now = Date.now();
+      const diff = Math.round((localTargetTime - now) / 1000);
       
       if (diff <= 0) {
         clearInterval(timerInterval);
@@ -249,12 +253,11 @@ export default function App() {
 
     } else {
         const mode = receiverModeRef.current;
-        addLog(`СТАРТ ПРИЕМНИКА (Осциллограф). Режим: ${mode}. Экран заморожен, слушаю эфир 60 секунд...`);
-        let lastTime = performance.now();
-        let startTime = performance.now();
+        addLog(`СТАРТ ПРИЕМНИКА (Осциллограф). Режим: ${mode}. Рисую кардиограмму...`);
         let isRunning = true;
-        const anomalies: { delta: number; timeFromStart: string }[] = [];
+        
         const deltas: number[] = [];
+        const anomalies: { delta: number; timeFromStart: string }[] = [];
         
         // Apply receiver mode
         if (mode === '1') {
@@ -268,27 +271,58 @@ export default function App() {
             killWorkers();
         }
         
-        // Даем UI обновиться перед заморозкой
+        const canvas = canvasRef.current;
+        let ctx: CanvasRenderingContext2D | null = null;
+        let width = 300;
+        let height = 150;
+        
+        if (canvas) {
+            canvas.width = canvas.clientWidth || 800; // Match CSS width
+            width = canvas.width;
+            ctx = canvas.getContext('2d', { alpha: false });
+            if (ctx) {
+                ctx.fillStyle = '#000';
+                ctx.fillRect(0, 0, width, height);
+            }
+        }
+        
+        let x = 0;
+        
+        // Даем UI обновиться перед стартом
         setTimeout(() => {
-            lastTime = performance.now();
-            startTime = performance.now();
+            let lastTime = performance.now();
+            let startTime = performance.now();
             
             const sense = () => {
                 if (!isRunning) return;
                 const now = performance.now();
                 const delta = now - lastTime;
+                lastTime = now;
                 
                 deltas.push(delta);
                 
-                // Ловим только явные аномалии, игнорируем мелкий мусор
+                // Ловим только явные аномалии
                 if (delta > 60) { 
                     const timeFromStart = ((now - startTime) / 1000).toFixed(2);
                     anomalies.push({ delta, timeFromStart });
                 }
                 
-                lastTime = now;
+                if (ctx) {
+                    let y = height - (delta * (height / 150)); 
+                    if (y < 0) y = 0; 
+                    
+                    ctx.fillStyle = '#0f0';
+                    ctx.fillRect(x, y, 2, height - y); 
+                    
+                    ctx.fillStyle = '#000';
+                    ctx.fillRect(x + 2, 0, 10, height); 
+                    
+                    x += 2;
+                    if (x >= width) {
+                        x = 0; 
+                    }
+                }
                 
-                // Крутим осциллограф 60 секунд
                 if (now - startTime < 60000) {
                     requestAnimationFrame(sense);
                 } else {
@@ -299,6 +333,7 @@ export default function App() {
                     
                     const over20 = deltas.filter(d => d > 20);
                     const maxDelta = deltas.length > 0 ? Math.max(...deltas) : 0;
+                    
                     addLog(`--- РЕЗУЛЬТАТ [Режим ${mode}] ---`, 'text-yellow-400 font-bold', `--- РЕЗУЛЬТАТ [Режим ${mode}] ---`);
                     addLog(`Всего фреймов: ${deltas.length}`, undefined, `Всего фреймов: ${deltas.length}`);
                     addLog(`Дельт > 20мс: ${over20.length}`, undefined, `Дельт > 20мс: ${over20.length}`);
@@ -315,11 +350,27 @@ export default function App() {
                     } else {
                         addLog("Эфир абсолютно чист (>60мс не найдено).", 'text-green-400', "Эфир абсолютно чист (>60мс не найдено).");
                     }
+                    
+                    setTestData(deltas);
+                    addLog(`--- СЫРЫЕ ДАННЫЕ МИЛЛИСЕКУНД (все кадры за 1 мин) ---`, 'text-[#00FF41] opacity-70');
+                    addLog(deltas.map(d => Math.round(d)).join(','), 'text-[#00FF41] opacity-50 text-[10px] break-all leading-[1]');
                 }
             };
             requestAnimationFrame(sense);
         }, 100);
     }
+  };
+
+  const downloadData = () => {
+    if (!testData) return;
+    const csvContent = "data:text/csv;charset=utf-8,frame,delta_ms\n" + testData.map((d, i) => `${i},${d.toFixed(2)}`).join('\n');
+    const encodedUri = encodeURI(csvContent);
+    const link = document.createElement("a");
+    link.setAttribute("href", encodedUri);
+    link.setAttribute("download", `quantum_deltas_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
   };
 
   return (
@@ -442,6 +493,21 @@ export default function App() {
               <div className="text-[20px] sm:text-[24px] text-yellow-400 tracking-[5px] text-center font-bold">
                 {currentBitInfo}
               </div>
+            )}
+            <canvas 
+              ref={canvasRef} 
+              className="w-full h-[150px] mt-4" 
+              style={{ display: (!isSenderRef.current) ? 'block' : 'none' }}
+              width={800}
+              height={150}
+            />
+            {testData && !isSenderRef.current && (
+                <button 
+                  onClick={downloadData}
+                  className="mt-6 px-6 py-3 border border-[#00FF41] text-[#00FF41] bg-black hover:bg-[#00FF41] hover:text-black font-bold text-xs uppercase transition-all flex items-center justify-center w-full max-w-xs"
+                >
+                  <Save size={16} className="mr-2" /> Выгрузить график (CSV)
+                </button>
             )}
           </div>
         )}
