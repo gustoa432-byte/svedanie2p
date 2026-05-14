@@ -10,7 +10,7 @@ interface LogEntry {
 }
 
 export default function App() {
-  const [peerId, setPeerId] = useState<string>('...');
+  const [peerId, setPeerId] = useState<string>('Генерация ID...');
   const [targetId, setTargetId] = useState<string>('');
   const [status, setStatus] = useState<string>('Инициализация сети...');
   const [logs, setLogs] = useState<LogEntry[]>([]);
@@ -50,12 +50,24 @@ export default function App() {
   }, [logs]);
 
   useEffect(() => {
-    const peer = new Peer();
+    const isWss = window.location.protocol === 'https:';
+    const peer = new Peer({
+      host: window.location.hostname,
+      port: window.location.port ? Number(window.location.port) : (isWss ? 443 : 80),
+      path: '/peerjs',
+      secure: isWss
+    });
     peerRef.current = peer;
 
     peer.on('open', (id) => {
       setPeerId(id);
       setStatus('Готов к подключению');
+    });
+
+    peer.on('error', (err) => {
+      setStatus(`Ошибка соединения!`);
+      addLog(`PeerJS error: ${err.type} - ${err.message}`, 'text-red-500');
+      // Some networks block WebRTC or the default PeerJS server is down.
     });
 
     peer.on('connection', (c) => {
