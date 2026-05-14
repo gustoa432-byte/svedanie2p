@@ -13,11 +13,12 @@ export default defineConfig(({mode}) => {
       VitePWA({
         registerType: 'autoUpdate',
         includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
-        manifestFilename: 'manifest.json',
+        manifestFilename: 'manifest.webmanifest',
         devOptions: {
           enabled: true
         },
         manifest: {
+          id: "/",
           name: "Quantum Entropy Bridge",
           short_name: "Q-Bridge",
           description: "A peer-to-peer quantum entropy synchronization simulator.",
@@ -25,22 +26,29 @@ export default defineConfig(({mode}) => {
           background_color: "#000000",
           display: "standalone",
           start_url: "/",
+          orientation: "any",
           scope: "/",
           icons: [
             {
-              src: "/icon-192.png",
+              src: "icon.svg",
+              sizes: "any",
+              type: "image/svg+xml",
+              purpose: "any"
+            },
+            {
+              src: "icon-192.png",
               sizes: "192x192",
               type: "image/png",
               purpose: "any"
             },
             {
-              src: "/icon-512.png",
+              src: "icon-512.png",
               sizes: "512x512",
               type: "image/png",
               purpose: "any"
             },
             {
-              src: "/icon-512.png",
+              src: "icon-512.png",
               sizes: "512x512",
               type: "image/png",
               purpose: "maskable"
