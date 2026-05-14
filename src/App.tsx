@@ -94,7 +94,14 @@ export default function App() {
       port: window.location.port ? Number(window.location.port) : (isWss ? 443 : 80),
       path: '/peerjs',
       secure: isWss,
-      debug: 3
+      debug: 3,
+      config: {
+        iceServers: [
+          { urls: 'stun:stun.l.google.com:19302' },
+          { urls: 'stun:stun1.l.google.com:19302' },
+          { urls: 'stun:stun2.l.google.com:19302' }
+        ]
+      }
     });
     peerRef.current = peer;
 
@@ -110,8 +117,8 @@ export default function App() {
 
     peer.on('connection', (c) => {
       connRef.current = c;
+      addLog('Входящее подключение, установка P2P (WebRTC)...');
       setupConn(c);
-      addLog('Входящее подключение...');
     });
 
     return () => {
@@ -122,13 +129,31 @@ export default function App() {
   }, []);
 
   const setupConn = (conn: DataConnection) => {
-    conn.on('open', () => {
+    const handleOpen = () => {
       setIsConnected(true);
       setStatus('СВЯЗЬ УСТАНОВЛЕНА');
       
       if (conn.reliable) {
         conn.send({ type: 'ping', sent: Date.now() });
+      } else {
+        conn.send({ type: 'ping', sent: Date.now() });
       }
+    };
+
+    if (conn.open) {
+      handleOpen();
+    } else {
+      conn.on('open', handleOpen);
+    }
+
+    conn.on('error', (err) => {
+      addLog(`Data connection error: ${err}`, 'text-red-500');
+    });
+
+    conn.on('close', () => {
+      addLog(`Соединение разорвано`, 'text-yellow-500');
+      setIsConnected(false);
+      setStatus('Ожидание подключения...');
     });
 
     conn.on('data', (data: any) => {
