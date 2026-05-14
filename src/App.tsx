@@ -170,6 +170,19 @@ export default function App() {
     executeCountdown(startTime, role, binary.length);
   };
 
+  const runLocalTest = (role: 'sender' | 'receiver') => {
+    const rawMsg = msgInput || "1";
+    const binary = textToBin(rawMsg.slice(0, 4));
+    binaryMsgRef.current = binary;
+
+    if (role === 'receiver') {
+        receiverModeRef.current = receiverMode;
+    }
+
+    const startTime = Date.now() + 5000; // 5 sec delay for local test
+    executeCountdown(startTime, role, binary.length);
+  };
+
   const executeCountdown = (localTargetTime: number, role: 'sender' | 'receiver', bitLength: number) => {
     isSenderRef.current = role === 'sender';
     setExperimentStarted(true);
@@ -226,138 +239,68 @@ export default function App() {
 
   const runModemSequence = () => {
     if (isSenderRef.current) {
-        addLog("СТАРТ ПЕРЕДАТЧИКА (Метроном). Удар каждую секунду.");
-        spawnWorkers(); // Стартовый разгон
+        addLog("СТАРТ ПЕРЕДАТЧИКА (Сублиматор).");
+        addLog("Разгон хаоса 10 секунд перед фазовым сбросом...");
         
-        let beats = 0;
-        const metronome = setInterval(() => {
-            if (beats >= 60) { // Бьем ровно 1 минуту
-                clearInterval(metronome);
-                killWorkers();
-                addLog("СЕАНС ЗАКРЫТ");
+        spawnWorkers(); // Запускаем кипение
+        
+        setTimeout(() => {
+            addLog(">>> УДАР (Сброс процессов) <<<", 'text-red-500 font-bold');
+            killWorkers(); 
+            
+            // Визуальный маркер удара
+            setFlash(true);
+            setTimeout(() => setFlash(false), 200);
+            
+            addLog("Сеанс окончен. Смотри на логи Приемника.");
+            setCountdown("СЕАНС ЗАКРЫТ");
+        }, 10000); // Ждем 10 секунд перед сбросом
+
+    } else {
+        addLog("СТАРТ ПРИЕМНИКА (Анализатор энтропии RNG).");
+        addLog("Слушаю ядро 30 секунд...");
+        
+        const chunkSize = 1024;
+        const arr = new Uint8Array(chunkSize);
+        let startTime = performance.now();
+        let scanCount = 0;
+        let anomaliesFound = 0;
+        let isRunning = true;
+        
+        const senseEntropy = () => {
+            if (!isRunning) return;
+            const now = performance.now();
+            if (now - startTime > 30000) { // Крутим 30 секунд
+                isRunning = false;
+                addLog(`СЕАНС ЗАКРЫТ. Сканирований: ${scanCount}. Аномалий: ${anomaliesFound}`);
                 setCountdown("СЕАНС ЗАКРЫТ");
                 return;
             }
-            
-            // ТОТ САМЫЙ КВАНТОВЫЙ УДАР (Сброс и моментальный рестарт)
-            killWorkers(); 
-            spawnWorkers(); 
-            
-            // Визуализация удара
-            setFlash(true);
-            setTimeout(() => setFlash(false), 100);
-            
-            beats++;
-        }, 1000);
-        slotIntervalRef.current = metronome as any;
 
-    } else {
-        const mode = receiverModeRef.current;
-        addLog(`СТАРТ ПРИЕМНИКА (Осциллограф). Режим: ${mode}. Рисую кардиограмму...`);
-        let isRunning = true;
-        
-        const deltas: number[] = [];
-        const anomalies: { delta: number; timeFromStart: string }[] = [];
-        
-        // Apply receiver mode
-        if (mode === '1') {
-            spawnWorkers();
-        } else if (mode === '0-1') {
-            spawnWorkers();
-            setTimeout(() => {
-                if (isRunning) killWorkers();
-            }, 8000);
-        } else {
-            killWorkers();
-        }
-        
-        const canvas = canvasRef.current;
-        let ctx: CanvasRenderingContext2D | null = null;
-        let width = 300;
-        let height = 150;
-        
-        if (canvas) {
-            canvas.width = canvas.clientWidth || 800; // Match CSS width
-            width = canvas.width;
-            ctx = canvas.getContext('2d', { alpha: false });
-            if (ctx) {
-                ctx.fillStyle = '#000';
-                ctx.fillRect(0, 0, width, height);
-            }
-        }
-        
-        let x = 0;
-        
-        // Даем UI обновиться перед стартом
-        setTimeout(() => {
-            let lastTime = performance.now();
-            let startTime = performance.now();
+            // Запрашиваем 1024 байта аппаратного хаоса
+            crypto.getRandomValues(arr);
+            scanCount++;
             
-            const sense = () => {
-                if (!isRunning) return;
-                const now = performance.now();
-                const delta = now - lastTime;
-                lastTime = now;
-                
-                deltas.push(delta);
-                
-                // Ловим только явные аномалии
-                if (delta > 60) { 
-                    const timeFromStart = ((now - startTime) / 1000).toFixed(2);
-                    anomalies.push({ delta, timeFromStart });
-                }
-                
-                if (ctx) {
-                    let y = height - (delta * (height / 150)); 
-                    if (y < 0) y = 0; 
-                    
-                    ctx.fillStyle = '#0f0';
-                    ctx.fillRect(x, y, 2, height - y); 
-                    
-                    ctx.fillStyle = '#000';
-                    ctx.fillRect(x + 2, 0, 10, height); 
-                    
-                    x += 2;
-                    if (x >= width) {
-                        x = 0; 
-                    }
-                }
-                
-                if (now - startTime < 60000) {
-                    requestAnimationFrame(sense);
-                } else {
-                    isRunning = false;
-                    killWorkers();
-                    addLog("СЕАНС ЗАКРЫТ");
-                    setCountdown("СЕАНС ЗАКРЫТ");
-                    
-                    const over20 = deltas.filter(d => d > 20);
-                    const maxDelta = deltas.length > 0 ? Math.max(...deltas) : 0;
-                    
-                    addLog(`--- РЕЗУЛЬТАТ [Режим ${mode}] ---`, 'text-yellow-400 font-bold', `--- РЕЗУЛЬТАТ [Режим ${mode}] ---`);
-                    addLog(`Всего фреймов: ${deltas.length}`, undefined, `Всего фреймов: ${deltas.length}`);
-                    addLog(`Дельт > 20мс: ${over20.length}`, undefined, `Дельт > 20мс: ${over20.length}`);
-                    addLog(`Максимальная дельта: ${maxDelta.toFixed(2)}мс`, undefined, `Максимальная дельта: ${maxDelta.toFixed(2)}мс`);
-                    
-                    if (anomalies.length > 0) {
-                        addLog(`--- НАЙДЕНО АНОМАЛИЙ (>60мс): ${anomalies.length} ---`, 'text-yellow-400 font-bold', `--- НАЙДЕНО АНОМАЛИЙ (>60мс): ${anomalies.length} ---`);
-                        anomalies.forEach((a, i) => {
-                            if (i < 50) {
-                                addLog(`АНОМАЛИЯ: ${a.delta.toFixed(1)} мс (секунда: ${a.timeFromStart})`, 'text-yellow-400', `АНОМАЛИЯ: ${a.delta.toFixed(1)} мс (секунда: ${a.timeFromStart})`);
-                            }
-                        });
-                        if (anomalies.length > 50) addLog(`... и еще ${anomalies.length - 50} скрыто`, undefined, `... и еще ${anomalies.length - 50} скрыто`);
-                    } else {
-                        addLog("Эфир абсолютно чист (>60мс не найдено).", 'text-green-400', "Эфир абсолютно чист (>60мс не найдено).");
-                    }
-                    
-                    setTestData(deltas);
-                    addLog(`--- СЫРЫЕ ДАННЫЕ МИЛЛИСЕКУНД (все кадры за 1 мин) ---`, 'text-[#00FF41] opacity-70');
-                    addLog(deltas.map(d => Math.round(d)).join(','), 'text-[#00FF41] opacity-50 text-[10px] break-all leading-[1]');
-                }
-            };
-            requestAnimationFrame(sense);
-        }, 100);
+            // Вычисляем среднее значение (идеально = 127.5)
+            let sum = 0;
+            for (let i = 0; i < chunkSize; i++) {
+                sum += arr[i];
+            }
+            let mean = sum / chunkSize;
+            
+            // ЖЕСТКИЙ ФИЛЬТР: Ловим только невозможные отклонения
+            // Норма - от 120 до 135. Всё что за пределами - аномалия.
+            if (mean < 118 || mean > 137) {
+                anomaliesFound++;
+                const timeFromStart = ((now - startTime) / 1000).toFixed(2);
+                addLog(`АНОМАЛИЯ ЭНТРОПИИ: ${mean.toFixed(2)} (сек: ${timeFromStart})`, 'text-fuchsia-400 font-bold', `АНОМАЛИЯ ЭНТРОПИИ: ${mean.toFixed(2)} (сек: ${timeFromStart})`);
+            }
+            
+            // Спим 5 миллисекунд и слушаем снова (чтобы не повесить браузер)
+            setTimeout(senseEntropy, 5);
+        };
+        
+        senseEntropy();
     }
   };
 
@@ -428,6 +371,27 @@ export default function App() {
                   className="bg-[#00FF41] text-black w-full py-3 font-bold text-xs hover:bg-[#00CC33] active:scale-95 disabled:opacity-30 disabled:cursor-not-allowed transition-all uppercase"
                 >
                   Создать линк
+                </button>
+              </div>
+            </div>
+
+            <div className="border border-[#00FF41]/30 bg-[#0A0A0A] p-4">
+              <h3 className="text-[10px] uppercase tracking-widest opacity-50 mb-4 border-b border-[#00FF41]/20 pb-2">Локальный тест (Без P2P)</h3>
+              <p className="text-[9px] opacity-60 mb-4">
+                Запустится через 5 секунд после нажатия. Открой второе окно и нажми другую роль, чтобы протестировать на одном устройстве.
+              </p>
+              <div className="flex gap-2">
+                <button 
+                  onClick={() => runLocalTest('sender')}
+                  className="bg-transparent border border-red-500 text-red-500 hover:bg-red-500 hover:text-black flex-1 py-3 font-bold text-xs active:scale-95 transition-all uppercase text-center"
+                >
+                  Передатчик
+                </button>
+                <button 
+                  onClick={() => runLocalTest('receiver')}
+                  className="bg-transparent border border-[#00FF41] text-[#00FF41] hover:bg-[#00FF41] hover:text-black flex-1 py-3 font-bold text-xs active:scale-95 transition-all uppercase text-center"
+                >
+                  Приемник
                 </button>
               </div>
             </div>
