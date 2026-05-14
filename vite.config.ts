@@ -12,46 +12,32 @@ export default defineConfig(({mode}) => {
       tailwindcss(),
       VitePWA({
         registerType: 'autoUpdate',
-        includeAssets: ['icon.svg', 'icon-192.png', 'icon-512.png'],
-        manifestFilename: 'manifest.webmanifest',
-        devOptions: {
-          enabled: true
-        },
+        includeAssets: ['icon.svg'],
         manifest: {
-          id: "/",
-          name: "Quantum Entropy Bridge",
-          short_name: "Q-Bridge",
-          description: "A peer-to-peer quantum entropy synchronization simulator.",
-          theme_color: "#000000",
-          background_color: "#000000",
-          display: "standalone",
-          start_url: "/",
-          orientation: "any",
-          scope: "/",
+          id: '/',
+          name: 'Quantum Entropy Bridge',
+          short_name: 'Q-Bridge',
+          description: 'A peer-to-peer quantum entropy synchronization simulator.',
+          theme_color: '#000000',
+          background_color: '#000000',
+          display: 'standalone',
+          start_url: '/',
           icons: [
             {
-              src: "icon.svg",
-              sizes: "any",
-              type: "image/svg+xml",
-              purpose: "any"
+              src: '/icon-192.png',
+              sizes: '192x192',
+              type: 'image/png'
             },
             {
-              src: "icon-192.png",
-              sizes: "192x192",
-              type: "image/png",
-              purpose: "any"
+              src: '/icon-512.png',
+              sizes: '512x512',
+              type: 'image/png'
             },
             {
-              src: "icon-512.png",
-              sizes: "512x512",
-              type: "image/png",
-              purpose: "any"
-            },
-            {
-              src: "icon-512.png",
-              sizes: "512x512",
-              type: "image/png",
-              purpose: "maskable"
+              src: '/icon-512.png',
+              sizes: '512x512',
+              type: 'image/png',
+              purpose: 'maskable'
             }
           ]
         }
