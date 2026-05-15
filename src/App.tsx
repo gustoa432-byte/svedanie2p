@@ -33,7 +33,7 @@ export default function App() {
   const [isConnected, setIsConnected] = useState<boolean>(false);
   const [experimentStarted, setExperimentStarted] = useState<boolean>(false);
   const [countdown, setCountdown] = useState<number | string | null>(null);
-  const [testData, setTestData] = useState<number[] | null>(null);
+  const [testData, setTestData] = useState<{ time: string, val: string }[] | null>(null);
   const [currentBitInfo, setCurrentBitInfo] = useState<string>('');
   const [flash, setFlash] = useState<boolean>(false);
   const [copied, setCopied] = useState<boolean>(false);
@@ -263,65 +263,114 @@ export default function App() {
   };
 
   const runModemSequence = () => {
+    // Вектор Передатчика (Антиматерия)
+    const senderCode = `
+        let n = -Number.MAX_SAFE_INTEGER;
+        self.onmessage = function(e) { if(e.data === "INVERT") n = n * -9.9999; };
+        while(true) { // Бесконечный цикл, чтобы процессор кипел даже после инверсии
+            n += 1;
+            let burn = Math.sqrt(Math.abs(n)) * Math.sin(n);
+        }
+    `;
+
+    // Вектор Приемника (Материя)
+    const receiverCode = `
+        let n = Number.MAX_SAFE_INTEGER;
+        self.onmessage = function(e) { if(e.data === "INVERT") n = n * -9.9999; };
+        while(true) { 
+            n -= 1;
+            let burn = Math.sqrt(Math.abs(n)) * Math.sin(n);
+        }
+    `;
+
+    // Запускаем либо минус, либо плюс в зависимости от роли
+    const syncDipole = (isSenderRole: boolean) => {
+        const code = isSenderRole ? senderCode : receiverCode;
+        const blob = new Blob([code], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(blob);
+        
+        for(let i = 0; i < 4; i++) {
+            let w = new Worker(workerUrl);
+            workersRef.current.push(w);
+        }
+    };
+
     if (isSenderRef.current) {
-        addLog("СТАРТ ПЕРЕДАТЧИКА (Сублиматор).");
-        addLog("Разгон хаоса 10 секунд перед фазовым сбросом...");
+        addLog("СТАРТ ПЕРЕДАТЧИКА (Вектор: АНТИМАТЕРИЯ).");
+        addLog("1. Движение от минус бесконечности к нулю...");
         
-        spawnWorkers(); // Запускаем кипение
+        syncDipole(true); // Запускаем минусовой код
         
+        // Удар по математике (Инверсия на 9-й секунде)
         setTimeout(() => {
-            addLog(">>> УДАР (Сброс процессов) <<<", 'text-red-500 font-bold');
-            killWorkers(); 
+            addLog(">>> ИНВЕРСИЯ ПОЛЯРНОСТИ (x -9.9999) <<<", 'text-yellow-400 font-bold');
+            workersRef.current.forEach(w => w.postMessage("INVERT"));
+        }, 9000);
+        
+        // Удар по физике (Сброс на 10-й секунде)
+        setTimeout(() => {
+            addLog(">>> 2. КОЛЛАПС ДИПОЛЯ (Уничтожение вектора) <<<", 'text-red-500 font-bold');
+            killWorkers();
             
-            // Визуальный маркер удара
             setFlash(true);
             setTimeout(() => setFlash(false), 200);
             
-            addLog("Сеанс окончен. Смотри на логи Приемника.");
+            addLog("Передатчик мертв. Баланс разорван.");
             setCountdown("СЕАНС ЗАКРЫТ");
-        }, 10000); // Ждем 10 секунд перед сбросом
+        }, 10000);
 
     } else {
-        addLog("СТАРТ ПРИЕМНИКА (Анализатор энтропии RNG).");
-        addLog("Слушаю ядро 30 секунд...");
+        addLog("СТАРТ ПРИЕМНИКА (Вектор: МАТЕРИЯ).");
+        addLog("1. Движение от плюс бесконечности к нулю...");
+        
+        syncDipole(false); // Запускаем плюсовой код
+        
+        addLog("2. Слушаю энтропию ядра 30 секунд...");
         
         const chunkSize = 1024;
         const arr = new Uint8Array(chunkSize);
         let startTime = performance.now();
         let scanCount = 0;
-        let anomaliesFound = 0;
         let isRunning = true;
+        
+        let rawData: { time: string, val: string }[] = [];
         
         const senseEntropy = () => {
             if (!isRunning) return;
             const now = performance.now();
-            if (now - startTime > 30000) { // Крутим 30 секунд
+            if (now - startTime > 30000) { 
                 isRunning = false;
-                addLog(`СЕАНС ЗАКРЫТ. Сканирований: ${scanCount}. Аномалий: ${anomaliesFound}`);
+                addLog(`СЕАНС ЗАКРЫТ. Сканирований: ${scanCount}.`);
+                addLog("Выгружаю массив хаоса...");
+                
+                killWorkers(); // Глушим свой вектор
+                
+                let csvContent = "data:text/csv;charset=utf-8,Time_ms,Entropy_Mean\n";
+                rawData.forEach(function(row) {
+                    csvContent += row.time + "," + row.val + "\n";
+                });
+                var encodedUri = encodeURI(csvContent);
+                var link = document.createElement("a");
+                link.setAttribute("href", encodedUri);
+                link.setAttribute("download", `dipole_entropy_log_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
+                document.body.appendChild(link);
+                link.click();
+                
+                setTestData(rawData);
                 setCountdown("СЕАНС ЗАКРЫТ");
                 return;
             }
 
-            // Запрашиваем 1024 байта аппаратного хаоса
             crypto.getRandomValues(arr);
             scanCount++;
             
-            // Вычисляем среднее значение (идеально = 127.5)
             let sum = 0;
             for (let i = 0; i < chunkSize; i++) {
                 sum += arr[i];
             }
-            let mean = sum / chunkSize;
+            let mean = (sum / chunkSize).toFixed(2);
+            rawData.push({ time: (now - startTime).toFixed(1), val: mean });
             
-            // ЖЕСТКИЙ ФИЛЬТР: Ловим только невозможные отклонения
-            // Норма - от 120 до 135. Всё что за пределами - аномалия.
-            if (mean < 118 || mean > 137) {
-                anomaliesFound++;
-                const timeFromStart = ((now - startTime) / 1000).toFixed(2);
-                addLog(`АНОМАЛИЯ ЭНТРОПИИ: ${mean.toFixed(2)} (сек: ${timeFromStart})`, 'text-fuchsia-400 font-bold', `АНОМАЛИЯ ЭНТРОПИИ: ${mean.toFixed(2)} (сек: ${timeFromStart})`);
-            }
-            
-            // Спим 5 миллисекунд и слушаем снова (чтобы не повесить браузер)
             setTimeout(senseEntropy, 5);
         };
         
@@ -331,11 +380,11 @@ export default function App() {
 
   const downloadData = () => {
     if (!testData) return;
-    const csvContent = "data:text/csv;charset=utf-8,frame,delta_ms\n" + testData.map((d, i) => `${i},${d.toFixed(2)}`).join('\n');
+    const csvContent = "data:text/csv;charset=utf-8,Time_ms,Entropy_Mean\n" + testData.map((d) => `${d.time},${d.val}`).join('\n');
     const encodedUri = encodeURI(csvContent);
     const link = document.createElement("a");
     link.setAttribute("href", encodedUri);
-    link.setAttribute("download", `quantum_deltas_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
+    link.setAttribute("download", `entropy_raw_log_${new Date().toISOString().replace(/[:.]/g, '-')}.csv`);
     document.body.appendChild(link);
     link.click();
     document.body.removeChild(link);
