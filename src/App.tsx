@@ -413,10 +413,22 @@ export default function App() {
 
         const cycle = () => {
              const now = performance.now();
-             if (massAttackMode && now - startOverall > sLimit) {
-                 addLog(`СЕАНС ЗАКРЫТ. Пройдено циклов: ${runCount}`);
-                 setCountdown("СЕАНС ЗАКРЫТ");
-                 return;
+             const bitLen = binaryMsgRef.current.length;
+             
+             if (massAttackMode) {
+                 if (now - startOverall > sLimit) {
+                     addLog(`СЕАНС ЗАКРЫТ. Пройдено циклов: ${runCount}`);
+                     setCountdown("СЕАНС ЗАКРЫТ");
+                     setCurrentBitInfo("");
+                     return;
+                 }
+             } else {
+                 if (runCount >= bitLen) {
+                     addLog(`СЕАНС ЗАКРЫТ. Пройдено циклов: ${runCount}`);
+                     setCountdown("СЕАНС ЗАКРЫТ");
+                     setCurrentBitInfo("");
+                     return;
+                 }
              }
 
              runCount++;
@@ -430,7 +442,15 @@ export default function App() {
                  currentKLimit = kLimit * mutliplier;
              }
              
-             if (massAttackMode) addLog(`--- ЦИКЛ АТАКИ #${runCount} (Разгон: ${currentInvLimit}мс, Суицид: ${currentKLimit}мс) ---`);
+             if (massAttackMode) {
+                 addLog(`--- ЦИКЛ АТАКИ #${runCount} (Разгон: ${currentInvLimit}мс, Суицид: ${currentKLimit}мс) ---`);
+                 setCurrentBitInfo(`ЦИКЛ АТАКИ ${runCount}`);
+             } else {
+                 const bit = binaryMsgRef.current[runCount - 1] || "0";
+                 addLog(`--- ПЕРЕДАЧА БИТА #${runCount} [ФАЗА: ${bit}] ---`);
+                 setCurrentBitInfo(`ФАЗА ПЕРЕДАЧИ БИТА: ${bit} [${runCount} / ${bitLen}]`);
+             }
+             
              addLog(useDualPolarity ? "1. Движение с двух сторон к нулю..." : "1. Движение от минус бесконечности к нулю...");
              syncDipole(true);
              
@@ -453,20 +473,15 @@ export default function App() {
                  setFlash(true);
                  setTimeout(() => setFlash(false), 200);
 
-                 if (massAttackMode) {
-                     if (useRestInterval) {
-                         let currentRLimit = restIntervalMs ? Number(restIntervalMs) : 5000;
-                         if (useExponentialScaling) {
-                             currentRLimit = currentRLimit * Math.pow(2, runCount - 1);
-                         }
-                         addLog(`--- ОЖИДАНИЕ/СИНХРОНИЗАЦИЯ: ${currentRLimit}мс ---`, 'text-blue-400');
-                         setWorkerTimeout(cycle, currentRLimit);
-                     } else {
-                         cycle();
+                 if (useRestInterval || !massAttackMode) {
+                     let currentRLimit = restIntervalMs ? Number(restIntervalMs) : 5000;
+                     if (useExponentialScaling && massAttackMode) {
+                         currentRLimit = currentRLimit * Math.pow(2, runCount - 1);
                      }
+                     addLog(`--- ОЖИДАНИЕ/СИНХРОНИЗАЦИЯ: ${currentRLimit}мс ---`, 'text-blue-400');
+                     setWorkerTimeout(cycle, currentRLimit);
                  } else {
-                     addLog("Передатчик мертв. Баланс разорван.");
-                     setCountdown("СЕАНС ЗАКРЫТ");
+                     cycle();
                  }
              }, currentKLimit);
         };
@@ -479,8 +494,18 @@ export default function App() {
 
         const cycle = () => {
              const now = performance.now();
-             if (massAttackMode && now - startOverall > listenTime) {
-                 return;
+             const bitLen = binaryMsgRef.current.length;
+             
+             if (massAttackMode) {
+                 if (now - startOverall > listenTime) {
+                     setCurrentBitInfo("");
+                     return;
+                 }
+             } else {
+                 if (runCount >= bitLen) {
+                     setCurrentBitInfo("");
+                     return;
+                 }
              }
              
              runCount++;
@@ -494,7 +519,14 @@ export default function App() {
                  currentKLimit = kLimit * mutliplier;
              }
 
-             if (massAttackMode) addLog(`--- ЦИКЛ ПРИЕМА #${runCount} (Разгон: ${currentInvLimit}мс, Суицид: ${currentKLimit}мс) ---`);
+             if (massAttackMode) {
+                 addLog(`--- ЦИКЛ ПРИЕМА #${runCount} (Разгон: ${currentInvLimit}мс, Суицид: ${currentKLimit}мс) ---`);
+                 setCurrentBitInfo(`ЦИКЛ ПРИЕМА ${runCount}`);
+             } else {
+                 const bit = binaryMsgRef.current[runCount - 1] || "0";
+                 addLog(`--- ПРИЕМ БИТА #${runCount} [ФАЗА ОЖИДАНИЯ: ${bit}] ---`);
+                 setCurrentBitInfo(`ФАЗА ПРИЕМА: ОЖИДАНИЕ БИТА [${runCount} / ${bitLen}]`);
+             }
              
              if (receiverModeRef.current === 'idle') {
                  addLog(`--- Режим ХОЛОСТОЙ ХОД (Полное бездействие приемника) ---`);
@@ -503,16 +535,14 @@ export default function App() {
                  addLog(`--- Режим СУИЦИД (БЕЗ НАПРЯЖЕНИЯ) ---`);
                  // we skip spawning workers completely
                  setWorkerTimeout(() => {
-                     if (massAttackMode) {
-                         if (useRestInterval) {
-                             let currentRLimit = restIntervalMs ? Number(restIntervalMs) : 5000;
-                             if (useExponentialScaling) {
-                                 currentRLimit = currentRLimit * Math.pow(2, runCount - 1);
-                             }
-                             setWorkerTimeout(cycle, currentRLimit);
-                         } else {
-                             cycle();
+                     if (useRestInterval || !massAttackMode) {
+                         let currentRLimit = restIntervalMs ? Number(restIntervalMs) : 5000;
+                         if (useExponentialScaling && massAttackMode) {
+                             currentRLimit = currentRLimit * Math.pow(2, runCount - 1);
                          }
+                         setWorkerTimeout(cycle, currentRLimit);
+                     } else {
+                         cycle();
                      }
                  }, currentKLimit);
              } else {
@@ -533,16 +563,14 @@ export default function App() {
 
                  setWorkerTimeout(() => {
                      killWorkers();
-                     if (massAttackMode) {
-                         if (useRestInterval) {
-                             let currentRLimit = restIntervalMs ? Number(restIntervalMs) : 5000;
-                             if (useExponentialScaling) {
-                                 currentRLimit = currentRLimit * Math.pow(2, runCount - 1);
-                             }
-                             setWorkerTimeout(cycle, currentRLimit);
-                         } else {
-                             cycle();
+                     if (useRestInterval || !massAttackMode) {
+                         let currentRLimit = restIntervalMs ? Number(restIntervalMs) : 5000;
+                         if (useExponentialScaling && massAttackMode) {
+                             currentRLimit = currentRLimit * Math.pow(2, runCount - 1);
                          }
+                         setWorkerTimeout(cycle, currentRLimit);
+                     } else {
+                         cycle();
                      }
                  }, currentKLimit);
              }
