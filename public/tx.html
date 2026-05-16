@@ -1,0 +1,344 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ЭМИ-Передатчик с фазовой модуляцией (TX)</title>
+    <style>
+        :root {
+            --term-green: #00FF41;
+            --term-red: #FF003C;
+            --term-bg: #0A0A0A;
+            --term-panel: #111111;
+        }
+        body {
+            background-color: var(--term-bg);
+            color: var(--term-green);
+            font-family: 'Courier New', Courier, monospace;
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+        }
+        h1 {
+            text-transform: uppercase;
+            font-size: 1.5rem;
+            border-bottom: 2px solid var(--term-green);
+            padding-bottom: 10px;
+            margin-bottom: 30px;
+            text-align: center;
+            width: 100%;
+            max-width: 600px;
+            text-shadow: 0 0 5px var(--term-green);
+        }
+        .panel {
+            background-color: var(--term-panel);
+            border: 1px solid rgba(0, 255, 65, 0.4);
+            padding: 20px;
+            width: 100%;
+            max-width: 600px;
+            box-sizing: border-box;
+            box-shadow: 0 0 15px rgba(0, 255, 65, 0.1);
+            margin-bottom: 20px;
+        }
+        .control-group {
+            margin-bottom: 25px;
+            display: flex;
+            flex-direction: column;
+            gap: 10px;
+        }
+        button {
+            background-color: transparent;
+            color: var(--term-green);
+            border: 1px solid var(--term-green);
+            padding: 15px;
+            font-size: 1rem;
+            font-weight: bold;
+            font-family: inherit;
+            text-transform: uppercase;
+            cursor: pointer;
+            transition: all 0.1s;
+        }
+        button:active {
+            transform: scale(0.98);
+        }
+        button.active {
+            background-color: var(--term-green);
+            color: black;
+            box-shadow: 0 0 10px var(--term-green);
+        }
+        button.shift-btn {
+            border-color: #00A3FF;
+            color: #00A3FF;
+        }
+        button.shift-btn:hover {
+            background-color: rgba(0, 163, 255, 0.1);
+        }
+        button.shift-btn:active {
+            background-color: #00A3FF;
+            color: black;
+            box-shadow: 0 0 10px #00A3FF;
+        }
+        .slider-container {
+            display: flex;
+            align-items: center;
+            gap: 15px;
+        }
+        input[type=range] {
+            flex-grow: 1;
+            accent-color: var(--term-green);
+            height: 4px;
+            background: #333;
+            outline: none;
+            -webkit-appearance: none;
+        }
+        input[type=range]::-webkit-slider-thumb {
+            -webkit-appearance: none;
+            width: 15px;
+            height: 25px;
+            background: var(--term-green);
+            cursor: pointer;
+        }
+        .status-box {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            border: 1px solid var(--term-green);
+            padding: 15px;
+            background: black;
+            font-size: 1.2rem;
+            font-weight: bold;
+        }
+        .status-indicator {
+            width: 20px;
+            height: 20px;
+            background-color: #333;
+            border-radius: 50%;
+            box-shadow: 0 0 0px transparent;
+        }
+        .status-indicator.on {
+            background-color: var(--term-red);
+            box-shadow: 0 0 15px var(--term-red);
+        }
+        .logs {
+            font-size: 0.85rem;
+            opacity: 0.8;
+            max-height: 150px;
+            overflow-y: auto;
+            border-top: 1px dashed rgba(0,255,65,0.4);
+            padding-top: 10px;
+            margin-top: 20px;
+            display: flex;
+            flex-direction: column;
+            gap: 4px;
+        }
+        .logs span {
+            word-break: break-all;
+        }
+        .logs::-webkit-scrollbar {
+            width: 5px;
+        }
+        .logs::-webkit-scrollbar-thumb {
+            background: var(--term-green);
+        }
+    </style>
+</head>
+<body>
+
+    <h1>TX: Фазовая Модуляция</h1>
+
+    <div class="panel">
+        <div class="status-box">
+            <span id="status-text">СТАТУС: ОЖИДАНИЕ</span>
+            <div id="status-led" class="status-indicator"></div>
+        </div>
+    </div>
+
+    <div class="panel">
+        <div class="control-group">
+            <label>Несущая волна (Carrier Wave)</label>
+            <button id="btn-carrier">Включить передатчик</button>
+        </div>
+
+        <div class="control-group">
+            <label>Интенсивность нагрузки (Ядра: <span id="cores-val"></span>)</label>
+            <div class="slider-container">
+                <input type="range" id="cores-slider" min="1" step="1">
+            </div>
+        </div>
+
+        <div class="control-group" style="margin-top: 40px;">
+            <label>Управление фазой (Модуляция данных)</label>
+            <button id="btn-shift" class="shift-btn" disabled>Сдвиг фазы 180° (Кувалда)</button>
+        </div>
+
+        <div class="logs" id="logs"></div>
+    </div>
+
+    <script>
+        // --- Конфигурация ---
+        const INTERVAL_MS = 100; // 100мс работает / 100мс отдыхает
+        const MAX_CORES = navigator.hardwareConcurrency || 4;
+        
+        // --- Элементы UI ---
+        const btnCarrier = document.getElementById('btn-carrier');
+        const btnShift = document.getElementById('btn-shift');
+        const sliderCores = document.getElementById('cores-slider');
+        const valCores = document.getElementById('cores-val');
+        const statusText = document.getElementById('status-text');
+        const statusLed = document.getElementById('status-led');
+        const logsContainer = document.getElementById('logs');
+
+        // --- Состояние ---
+        let isCarrierActive = false;
+        let isWorkingCycle = false;
+        let phaseShiftPending = false;
+        let activeCores = MAX_CORES;
+        let timerId = null;
+        let workers = [];
+
+        // Инициализация ползунка
+        sliderCores.max = MAX_CORES;
+        sliderCores.value = MAX_CORES;
+        valCores.innerText = MAX_CORES;
+
+        sliderCores.addEventListener('input', (e) => {
+            activeCores = parseInt(e.target.value);
+            valCores.innerText = activeCores;
+            log(`Интенсивность изменена: ${activeCores} потоков.`);
+            if (isCarrierActive) {
+                initWorkers(); // Пересоздаем воркеры под нужное количество
+            }
+        });
+
+        // --- Код Воркера (Кувалда) ---
+        // Используем Blob, чтобы не требовать внешних файлов.
+        const workerCode = `
+            let running = false;
+            self.onmessage = function(e) {
+                if (e.data === 'start') {
+                    running = true;
+                    heavyPulse();
+                } else if (e.data === 'stop') {
+                    running = false;
+                }
+            };
+            function heavyPulse() {
+                if (!running) return;
+                
+                // Блокируем event loop на 2 миллисекунды для плотной нагрузки
+                const end = Date.now() + 2;
+                while (Date.now() < end) {
+                    Math.sqrt(Math.random() * Math.random());
+                    Math.atan2(Math.random(), Math.random());
+                }
+                
+                // Передышка для обработки сообщений (stop)
+                if (running) {
+                    setTimeout(heavyPulse, 0);
+                }
+            }
+        `;
+        const workerBlob = new Blob([workerCode], { type: 'application/javascript' });
+        const workerUrl = URL.createObjectURL(workerBlob);
+
+        // --- Управление Воркерами ---
+        function initWorkers() {
+            destroyWorkers();
+            for (let i = 0; i < activeCores; i++) {
+                workers.push(new Worker(workerUrl));
+            }
+        }
+
+        function destroyWorkers() {
+            workers.forEach(w => w.terminate());
+            workers = [];
+        }
+
+        function triggerWorkers(state) {
+            workers.forEach(w => w.postMessage(state ? 'start' : 'stop'));
+            
+            if (state) {
+                statusLed.classList.add('on');
+                statusText.innerText = 'СТАТУС: ИЗЛУЧЕНИЕ (ON)';
+                statusText.style.color = 'var(--term-red)';
+            } else {
+                statusLed.classList.remove('on');
+                statusText.innerText = 'СТАТУС: СПАД (OFF)';
+                statusText.style.color = 'var(--term-green)';
+            }
+        }
+
+        // --- Логика Несущей Волны ---
+        function pulseCycle() {
+            if (!isCarrierActive) {
+                triggerWorkers(false);
+                statusText.innerText = 'СТАТУС: ОЖИДАНИЕ';
+                statusText.style.color = 'var(--term-green)';
+                return;
+            }
+
+            // Обработка сдвига фазы
+            if (phaseShiftPending) {
+                phaseShiftPending = false;
+                log('>>>> ФАЗА СДВИНУТА НА 180° (Пропуск такта) <<<<', '#00A3FF');
+                statusText.innerText = 'СДВИГ ФАЗЫ...';
+                statusText.style.color = '#00A3FF';
+                
+                // Пропускаем один флип состояния, просто ждем еще 1 интервал.
+                // Это задерживает волну ровно на 1 фазу (180 градусов).
+                timerId = setTimeout(pulseCycle, INTERVAL_MS);
+                return;
+            }
+
+            isWorkingCycle = !isWorkingCycle;
+            triggerWorkers(isWorkingCycle);
+            
+            timerId = setTimeout(pulseCycle, INTERVAL_MS);
+        }
+
+        // --- UI События ---
+        btnCarrier.addEventListener('click', () => {
+            isCarrierActive = !isCarrierActive;
+            if (isCarrierActive) {
+                btnCarrier.innerText = "Выключить передатчик";
+                btnCarrier.classList.add('active');
+                btnShift.disabled = false;
+                log('Несущая волна ЗАПУЩЕНА.');
+                initWorkers();
+                isWorkingCycle = false; // Начнем с включения в первом цикле
+                pulseCycle();
+            } else {
+                btnCarrier.innerText = "Включить передатчик";
+                btnCarrier.classList.remove('active');
+                btnShift.disabled = true;
+                log('Несущая волна ОСТАНОВЛЕНА.');
+                clearTimeout(timerId);
+                triggerWorkers(false);
+                destroyWorkers(); // Уничтожаем для экономии памяти
+            }
+        });
+
+        btnShift.addEventListener('click', () => {
+            if (!isCarrierActive) return;
+            phaseShiftPending = true;
+            log('Запрошен сдвиг фазы...');
+            
+            // Визуальный эффект клика
+            document.body.style.backgroundColor = '#001a33';
+            setTimeout(() => { document.body.style.backgroundColor = 'var(--term-bg)'; }, 100);
+        });
+
+        function log(msg, color = 'var(--term-green)') {
+            const time = new Date().toISOString().split('T')[1].slice(0, -1);
+            const span = document.createElement('span');
+            span.style.color = color;
+            span.innerText = `[${time}] ${msg}`;
+            logsContainer.prepend(span);
+        }
+
+        log('TX Терминал инициализирован. Ожидание команд.');
+    </script>
+</body>
+</html>
